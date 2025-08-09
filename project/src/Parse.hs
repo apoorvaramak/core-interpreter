@@ -89,8 +89,8 @@ aExpr = eVar
 
 eAp :: Parser Expr
 eAp = do 
-   expressions <- many1 aexpr
-   return foldl1 EAp expressions
+   expressions <- many1 aExpr
+   return (foldl1 EAp expressions)
 
 define :: Parser (Name, Expr)
 define = do
@@ -101,12 +101,12 @@ define = do
 
 eLet :: Parser Expr
 eLet = do 
-IsRec <- (symbol "letrec" >> return True)
-   <|> (symbol "let" >> return False)
-defs <- many1 define
-_ <- symbol "in"
-body <- expr
-return $ ELet IsRec defs body
+   isRec <- (symbol "letrec" >> return True)
+      <|> (symbol "let" >> return False)
+   defs <- many1 define
+   _ <- symbol "in"
+   body <- expr
+   return $ ELet isRec defs body
 
 eAltCase :: Parser (Int, [Name], Expr)
 eAltCase = do
@@ -123,7 +123,7 @@ eCase = do
    _ <- symbol "case"
    matchExpr <- expr
    _ <- symbol "of"
-   altCases <- many1 eAltCase
+   altCases <- eAltCase `sepBy1` (symbol ";")
    return $ ECase matchExpr altCases
 
 eLam :: Parser Expr
@@ -132,5 +132,4 @@ eLam = do
    params <- many1 id
    _ <- symbol "."
    body <- expr
-   return $ eLam params body
-
+   return $ ELam params body

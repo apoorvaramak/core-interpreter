@@ -5,7 +5,7 @@ module Types where
 
 import qualified Data.HashMap.Lazy as M
 
-type Env = M.HashMap Name Int  -- You will probably need to change this
+type Env = M.HashMap Name Val
 
 type Name = String
 type IsRec = Bool
@@ -27,3 +27,9 @@ data Expr = EVar Name                  -- Variables
 type Decl = (Name, [Name], Expr)       -- The name, parameter list, and body of a supercombinator declaration
 
 type Core = M.HashMap Name Decl        -- A core program is an environment of declarations
+
+data Val = IntVal Int
+         | BoolVal Bool
+         | CloVal [Name] Expr Env
+         | ExnVal Int [Val]
+         deriving (Show, Eq)
