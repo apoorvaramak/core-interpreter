@@ -31,5 +31,6 @@ type Core = M.HashMap Name Decl        -- A core program is an environment of de
 data Val = IntVal Int
          | BoolVal Bool
          | CloVal [Name] Expr Env
+         | ConstrVal Int Int [Val]
          | ExnVal Int [Val]
          deriving (Show, Eq)

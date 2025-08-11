@@ -23,7 +23,7 @@ compOps = M.fromList [ ("<", (<))
                      , (">", (>))
                      , ("<=", (<=))
                      , (">=", (>=))
-                     , ("!=", (/=))
+                     , ("~=", (/=))
                      , ("==", (==))
                      ]
 
@@ -69,13 +69,19 @@ eval (EAp (EAp (EVar op) e1) e2) env
 
 eval (EAp e1 e2) env =
   let v1 = eval e1 env
+      arg = eval e2 env
   in case v1 of
-    CloVal (x:xs) body clenv -> 
-      let args = eval e2 env
-          clenv1 = M.insert x args clenv
-          e3 = if (null xs) then body else ELam xs body
-      in eval e3 clenv1
-    _ -> error "applied to non-closure"
+    CloVal (x:xs) body clenv ->
+      let newEnv = M.insert x arg clenv
+          newExpr = if null xs then body else ELam xs body
+      in eval newExpr newEnv
+    CloVal [] _ _ -> error "Function has no parameters but was applied"
+    ConstrVal tag arity args ->
+      let args' = args ++ [arg]
+      in if length args' == arity
+           then ExnVal tag args'
+           else ConstrVal tag arity args'
+    _ -> error $ "Attempting to apply non-function value: " ++ show v1
 
 eval (ELet isRec pairs body) env =
   case isRec of
@@ -88,26 +94,23 @@ eval (ELet isRec pairs body) env =
           v1 = map (\(x, y) -> (x, eval y env)) pairs
       in eval body e1
 
--- eval (ECase e1 alts) env =
---   let v1 = eval e1 env
---   in case v1 of
---     ExnVal 
+eval (EPack tag arity) _ = ConstrVal tag arity []
+
 eval (ECase expr alts) env =
   case eval expr env of
-    ExnVal tag args ->
+    ExnVal tag args -> match tag args
+    IntVal n        -> match n []
+    _ -> error "ECase scrutinee must be a constructor or number"
+  where
+    match tag args =
       case lookupAlt tag alts of
-        Just (params, altExpr) ->
+        Just (params, rhs) ->
           if length params == length args
-            then
-              let newEnv = M.union (M.fromList (zip params args)) env
-              in eval altExpr newEnv
-            else
-              error $ "Constructor arity mismatch in case alternative for tag " ++ show tag
+            then let newEnv = M.union (M.fromList (zip params args)) env
+                 in eval rhs newEnv
+            else error $ "Constructor arity mismatch in case alternative for tag " ++ show tag
         Nothing ->
           error $ "No matching case alternative for tag " ++ show tag
-    _ -> error "ECase applied to a non-constructor value"
-
-eval (EPack x _) _ = ExnVal x []
 
 lookupAlt :: Int -> [(Int, [Name], Expr)] -> Maybe ([Name], Expr)
 lookupAlt _ [] = Nothing

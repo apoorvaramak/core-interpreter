@@ -13,14 +13,10 @@ import Control.Monad
 import Data.Functor.Identity (Identity)
 import Text.ParserCombinators.Parsec hiding (Parser)
 import Text.Parsec.Prim (ParsecT)
+import Data.List (partition)
 
---- The Parser
---- ----------
 
--- Pretty parser type
 type Parser = ParsecT String () Identity
-
---- ### Lexicals
 
 symbol :: String -> Parser String
 symbol s = do string s
@@ -37,26 +33,72 @@ id = do first <- oneOf ['a' .. 'z']
         rest <- many (oneOf $ ['a'..'z'] ++ ['A'..'Z'] ++ ['0'..'9'] ++ "'_")
         spaces
         return $ first:rest
-          
+
 expr :: Parser Expr
-expr = eLet
-   <|> eAp
-   <|> eCase
-   <|> eLam
+expr = orExpr
 
-decl :: Parser Decl
-decl = do name <- id
-          params <- many id
-          _ <- symbol "="
-          body <- expr
-          return (name,params,body)
+orExpr :: Parser Expr
+orExpr = do
+  left <- andExpr
+  rest <- many (do _ <- symbol "|"
+                   right <- andExpr
+                   return right)
+  return $ foldl (\l r -> EAp (EAp (EVar "|") l) r) left rest
 
-core :: Parser Core
-core = do decls <- decl `sepBy` (symbol ";")
-          return $ M.fromList [(n,v) | v@(n,_,_) <- decls]
+andExpr :: Parser Expr
+andExpr = do
+  left <- eqExpr
+  rest <- many (do _ <- symbol "&"
+                   right <- eqExpr
+                   return right)
+  return $ foldl (\l r -> EAp (EAp (EVar "&") l) r) left rest
 
-parseCore :: String -> Either ParseError Core
-parseCore text = parse core "Core" text
+eqExpr :: Parser Expr
+eqExpr = do
+  left <- relExpr
+  rest <- many (do op <- (symbol "==" <|> symbol "~=")
+                   right <- relExpr
+                   return (op, right))
+  return $ foldl (\l (op, r) -> EAp (EAp (EVar op) l) r) left rest
+
+relExpr :: Parser Expr
+relExpr = do
+  left <- addExpr
+  rest <- many (do op <- (try (symbol "<=") <|> try (symbol ">=") <|> symbol "<" <|> symbol ">")
+                   right <- addExpr
+                   return (op, right))
+  return $ foldl (\l (op, r) -> EAp (EAp (EVar op) l) r) left rest
+
+addExpr :: Parser Expr
+addExpr = do
+  left <- mulExpr
+  rest <- many (do op <- (try (symbol "+") <|> try (symbol "-"))
+                   right <- mulExpr
+                   return (op, right))
+  return $ foldl (\l (op, r) -> EAp (EAp (EVar op) l) r) left rest
+
+mulExpr :: Parser Expr
+mulExpr = do
+  left <- appExpr
+  rest <- many (do op <- (symbol "*" <|> symbol "/")
+                   right <- appExpr
+                   return (op, right))
+  return $ foldl (\l (op, r) -> EAp (EAp (EVar op) l) r) left rest
+
+appExpr :: Parser Expr
+appExpr = do
+  func <- atom
+  args <- many (try atom)
+  return $ foldl EAp func args
+
+atom :: Parser Expr
+atom =  eInt
+    <|> eVar
+    <|> ePack
+    <|> eLet
+    <|> eCase
+    <|> eLam
+    <|> parenExpr
 
 eInt :: Parser Expr
 eInt = do i <- int
@@ -81,23 +123,10 @@ parens p = do symbol "("
               symbol ")"
               return pp
 
-aExpr :: Parser Expr
-aExpr = eVar
-    <|> eInt
-    <|> ePack
-    <|> parens expr
+parenExpr :: Parser Expr
+parenExpr = parens expr
 
-eAp :: Parser Expr
-eAp = do 
-   expressions <- many1 aExpr
-   return (foldl1 EAp expressions)
-
-define :: Parser (Name, Expr)
-define = do
-   key <- id
-   _ <- symbol "="
-   value <- expr
-   return (key, value)
+--- ### Special Expressions
 
 eLet :: Parser Expr
 eLet = do 
@@ -107,6 +136,21 @@ eLet = do
    _ <- symbol "in"
    body <- expr
    return $ ELet isRec defs body
+
+define :: Parser (Name, Expr)
+define = do
+   key <- id
+   _ <- symbol "="
+   value <- expr
+   return (key, value)
+
+eCase :: Parser Expr
+eCase = do
+   _ <- symbol "case"
+   matchExpr <- expr
+   _ <- symbol "of"
+   altCases <- eAltCase `sepBy1` (symbol ";")
+   return $ ECase matchExpr altCases
 
 eAltCase :: Parser (Int, [Name], Expr)
 eAltCase = do
@@ -118,14 +162,6 @@ eAltCase = do
    altCaseExpr <- expr
    return (param, body, altCaseExpr)
 
-eCase :: Parser Expr
-eCase = do
-   _ <- symbol "case"
-   matchExpr <- expr
-   _ <- symbol "of"
-   altCases <- eAltCase `sepBy1` (symbol ";")
-   return $ ECase matchExpr altCases
-
 eLam :: Parser Expr
 eLam = do
    _ <- symbol "\\"
@@ -133,3 +169,61 @@ eLam = do
    _ <- symbol "."
    body <- expr
    return $ ELam params body
+
+--- ### Declarations
+
+declaration :: Parser (Either [(Name, Int)] Decl)
+declaration = try typeDeclaration <|> try regularDeclaration
+  where
+    typeDeclaration = do
+      result <- typeDecl
+      return $ Left result
+    regularDeclaration = do
+      result <- decl
+      return $ Right result
+
+typeDecl :: Parser [(Name, Int)]
+typeDecl = do
+  _ <- spaces
+  typeName <- id
+  _ <- symbol "::="
+  constructors <- constructorDecl `sepBy1` (symbol "|")
+  return constructors
+  where
+    constructorDecl = do
+      name <- id
+      params <- many id
+      return (name, length params)
+
+decl :: Parser Decl
+decl = do 
+  name <- id
+  params <- many id
+  _ <- symbol "="
+  body <- expr
+  return (name, params, body)
+
+--- ### Core Parser
+
+core :: Parser Core
+core = do 
+  spaces
+  declarations <- sepBy declaration (spaces >> char ';' >> spaces)
+  spaces
+  let (typeDecls, funcDecls) = partitionDeclarations declarations
+      constructorList = concat typeDecls
+      constructorMap = M.fromList [(name, (tag, arity)) | ((name, arity), tag) <- zip constructorList [1..]]
+      constructorDecls = [(name, [], EPack tag arity) | (name, (tag, arity)) <- M.toList constructorMap]
+      allDecls = constructorDecls ++ funcDecls
+  return $ M.fromList [(n, v) | v@(n, _, _) <- allDecls]
+  where
+    partitionDeclarations [] = ([], [])
+    partitionDeclarations (Left typeDecl : rest) = 
+      let (types, funcs) = partitionDeclarations rest
+      in (typeDecl : types, funcs)
+    partitionDeclarations (Right funcDecl : rest) = 
+      let (types, funcs) = partitionDeclarations rest
+      in (types, funcDecl : funcs)
+
+parseCore :: String -> Either ParseError Core
+parseCore text = parse core "Core" text
