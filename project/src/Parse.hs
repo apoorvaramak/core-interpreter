@@ -203,26 +203,24 @@ decl = do
   body <- expr
   return (name, params, body)
 
---- ### Core Parser
-
 core :: Parser Core
 core = do 
   spaces
   declarations <- sepBy declaration (spaces >> char ';' >> spaces)
   spaces
-  let (typeDecls, funcDecls) = partitionDeclarations declarations
-      constructorList = concat typeDecls
-      constructorMap = M.fromList [(name, (tag, arity)) | ((name, arity), tag) <- zip constructorList [1..]]
-      constructorDecls = [(name, [], EPack tag arity) | (name, (tag, arity)) <- M.toList constructorMap]
+  let (typeDecls, funcDecls) = partDecls declarations
+      constList = concat typeDecls
+      constMap = M.fromList [(name, (tag, arity)) | ((name, arity), tag) <- zip constList [1..]]
+      constructorDecls = [(name, [], EPack tag arity) | (name, (tag, arity)) <- M.toList constMap]
       allDecls = constructorDecls ++ funcDecls
   return $ M.fromList [(n, v) | v@(n, _, _) <- allDecls]
   where
-    partitionDeclarations [] = ([], [])
-    partitionDeclarations (Left typeDecl : rest) = 
-      let (types, funcs) = partitionDeclarations rest
+    partDecls [] = ([], [])
+    partDecls (Left typeDecl : rest) = 
+      let (types, funcs) = partDecls rest
       in (typeDecl : types, funcs)
-    partitionDeclarations (Right funcDecl : rest) = 
-      let (types, funcs) = partitionDeclarations rest
+    partDecls (Right funcDecl : rest) = 
+      let (types, funcs) = partDecls rest
       in (types, funcDecl : funcs)
 
 parseCore :: String -> Either ParseError Core
